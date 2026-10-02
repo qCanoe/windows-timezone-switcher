@@ -44,6 +44,7 @@ const fs=require('node:fs');
   const inactiveBorders=await page.getByRole('list').getByRole('button').evaluateAll(rows=>rows.filter(row=>row.getAttribute('aria-pressed')==='false').map(row=>getComputedStyle(row).borderLeftColor));
   assert.ok(inactiveBorders.every(color=>color==='rgba(0, 0, 0, 0)'));
   await page.screenshot({path:path.join(artifacts,'screenshot.png'),omitBackground:true});
+
   const checks=await page.evaluate(async()=>{
    const zones=await window.timezone.read();const id=zones.find(z=>z.current).id;
    const invalid=await window.timezone.switch('bad-zone');
@@ -56,6 +57,7 @@ const fs=require('node:fs');
   assert.equal(await page.getByRole('button',{name:'切换时区',exact:false}).isEnabled(),false);
   const overflow=await page.evaluate(()=>document.documentElement.scrollHeight>window.innerHeight);assert.equal(overflow,false);
   await page.getByRole('button',{name:'收起到托盘'}).click();
+  await expect.poll(()=>app.evaluate(()=>global.trayCheck().visible)).toBe(false);
   const hidden=await app.evaluate(()=>global.trayCheck());assert.equal(hidden.visible,false);assert.equal(hidden.tray,true);
   await app.evaluate(async ({BrowserWindow})=>{BrowserWindow.getAllWindows()[0].setPosition(40,40);await global.trayOpen();});
   const reopened=await app.evaluate(()=>global.trayCheck());
@@ -76,9 +78,39 @@ const fs=require('node:fs');
   assert.ok(reopenTrace.every(change=>!change.visible),'Window moved after it was shown');
   const stableBounds=await app.evaluate(()=>global.trayCheck());
   assert.deepEqual(stableBounds.bounds,reopened.bounds);
+  const fadeCheck=await app.evaluate(async ({BrowserWindow,systemPreferences})=>{
+   const window=BrowserWindow.getAllWindows()[0];
+   const values=[], original=window.setOpacity.bind(window);
+   window.setOpacity=value=>{values.push(value);return original(value);};
+   const reduced=systemPreferences.getAnimationSettings().prefersReducedMotion;
+   try {
+    const start=performance.now();await global.trayHide();
+    const duration=performance.now()-start;
+    const hidden=!window.isVisible();
+    await global.trayOpen();
+    const pending=global.trayHide();
+    await new Promise(resolve=>setTimeout(resolve,50));
+    await global.trayOpen();await pending;
+    await new Promise(resolve=>setTimeout(resolve,220));
+    return {values,duration,reduced,hidden,reopened:window.isVisible()&&window.getOpacity()===1,tray:global.trayCheck().tray};
+   } finally {window.setOpacity=original;}
+  });
+  assert.equal(fadeCheck.hidden,true);assert.equal(fadeCheck.tray,true);assert.equal(fadeCheck.reopened,true);
+  if(!fadeCheck.reduced) {
+   assert.ok(fadeCheck.values.some(value=>value>0&&value<1),'Fade did not use intermediate opacity');
+   assert.ok(fadeCheck.duration>=150&&fadeCheck.duration<1000,'Fade duration is unexpected');
+  }
+  const reducedMotionCheck=await app.evaluate(async ({BrowserWindow,systemPreferences})=>{
+   const window=BrowserWindow.getAllWindows()[0];
+   const settings=systemPreferences.getAnimationSettings;
+   systemPreferences.getAnimationSettings=()=>({...settings.call(systemPreferences),prefersReducedMotion:true});
+   try {await global.trayHide();return !window.isVisible()&&!global.trayCheck().fading;}
+   finally {systemPreferences.getAnimationSettings=settings;await global.trayOpen();}
+  });
+  assert.equal(reducedMotionCheck,true);
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
   assert.equal((await app.evaluate(()=>global.trayCheck())).tray,true);
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({packaged,noVisibleRepositionOnFiveReopens:true,workAreaBottomRightOnOpenAndReopen:true,fixedLightIgnoresOldDarkPreference:true,themeMenuRemoved:true,search:true,clearSearch:true,selection:true,tray:true,hide:true,closeKeepsRunning:true,unchangedZone:checks.current,renderErrors:errors}));
+  console.log(JSON.stringify({packaged,fadeOut:true,reopenDuringFade:true,noVisibleRepositionOnFiveReopens:true,workAreaBottomRightOnOpenAndReopen:true,fixedLightIgnoresOldDarkPreference:true,themeMenuRemoved:true,search:true,clearSearch:true,selection:true,tray:true,hide:true,closeKeepsRunning:true,unchangedZone:checks.current,renderErrors:errors}));
  } finally {await app.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,9 +1,10 @@
-const {app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Notification} = require('electron');
+const {app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Notification, systemPreferences} = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const {readZones, switchZone} = require('./zones.cjs');
 let panel, tray, trayMenu, quitting = false, switching = false, zones = [];
 let showTask = null, presentationGeneration = 0, blurTimer;
+let hideTask = null, fadeTimer, finishFade;
 const diagnostic = process.argv.includes('--diagnose-tray');
 function trace(event, detail={}) {
  if(!diagnostic || !process.env.TIMEZONE_TRAY_TRACE) return;
@@ -35,7 +36,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   panel.webContents.on('before-input-event', (event, input) => {if (input.key === 'Escape') {hidePanel();event.preventDefault();}});
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname,'tray.ico')));
   tray.setToolTip('时区切换');
-  tray.on('click', () => {trace('tray-click');if(!showTask) panel.isVisible() ? hidePanel() : showPanel();});
+  tray.on('click', () => {trace('tray-click');if(!showTask) (hideTask || !panel.isVisible()) ? showPanel() : hidePanel();});
   tray.on('double-click', () => {trace('tray-double-click');showPanel();});
   async function refresh() { zones=await readZones(); updateMenu(); return zones; }
   function trusted(event) { return event.sender === panel.webContents && event.senderFrame === panel.webContents.mainFrame; }
@@ -67,8 +68,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   if(!process.argv.includes('--background')) await showPanel();
   // Read-only hooks used by the packaged-app integration check.
   if(process.argv.includes('--test-mode') || diagnostic) {
-   global.trayCheck = () => ({tray:!!tray&&!tray.isDestroyed(), visible:panel.isVisible(), opacity:panel.getOpacity(), current:zones.find(z=>z.current)?.id, menu:trayMenu.items.map(item=>item.label), bounds:panel.getBounds(), screen:screen.getDisplayMatching(panel.getBounds()).workArea});
+   global.trayCheck = () => ({tray:!!tray&&!tray.isDestroyed(), visible:panel.isVisible(), opacity:panel.getOpacity(), reducedMotion:systemPreferences.getAnimationSettings().prefersReducedMotion, fading:!!hideTask, current:zones.find(z=>z.current)?.id, menu:trayMenu.items.map(item=>item.label), bounds:panel.getBounds(), screen:screen.getDisplayMatching(panel.getBounds()).workArea});
    global.trayOpen = showPanel;
+   global.trayHide = hidePanel;
   }
  }).catch(error => { console.error(error); app.quit(); });
 }
@@ -76,10 +78,13 @@ function showPanel() {
  trace('show-request');
  if (!panel || panel.isDestroyed() || !tray) return Promise.resolve();
  if(showTask) return showTask;
+ const wasFading=!!hideTask;
+ cancelFade();
+ if(wasFading && panel.isVisible()) {panel.setOpacity(1);panel.focus();return Promise.resolve();}
  if(panel.isVisible() && panel.getOpacity()===1) {panel.focus();return Promise.resolve();}
  clearTimeout(blurTimer);
  const generation=++presentationGeneration;
- showTask=presentPanel(generation).catch(error=>{trace('show-failed',{message:error.message});hidePanel();console.error(error);}).finally(()=>{showTask=null;});
+ showTask=presentPanel(generation).catch(error=>{trace('show-failed',{message:error.message});hidePanel(true);console.error(error);}).finally(()=>{showTask=null;});
  return showTask;
 }
 async function presentPanel(generation) {
@@ -113,13 +118,36 @@ async function presentPanel(generation) {
  trace('presented');
  panel.webContents.send('zones:refresh');
 }
-function hidePanel() {
+function cancelFade() {
+ clearTimeout(fadeTimer);
+ fadeTimer=null;
+ const resolve=finishFade;
+ finishFade=null;
+ hideTask=null;
+ if(resolve) resolve();
+}
+function hidePanel(immediate=false) {
  presentationGeneration++;
  clearTimeout(blurTimer);
- if(!panel || panel.isDestroyed() || !panel.isVisible()) return;
- panel.setOpacity(0);
- panel.hide();
+ if(!panel || panel.isDestroyed() || !panel.isVisible()) return Promise.resolve();
+ if(immediate || quitting || systemPreferences.getAnimationSettings().prefersReducedMotion || panel.getOpacity()===0) {
+  cancelFade(); panel.setOpacity(0); panel.hide(); return Promise.resolve();
+ }
+ if(hideTask) return hideTask;
+ const started=performance.now(), initialOpacity=panel.getOpacity(), duration=180;
+ hideTask=new Promise(resolve=>{
+  finishFade=resolve;
+  function step() {
+   if(panel.isDestroyed()) {cancelFade();return;}
+   const progress=Math.min(1,(performance.now()-started)/duration);
+   panel.setOpacity(initialOpacity*(1-progress)**3);
+   if(progress===1) {panel.hide();cancelFade();return;}
+   fadeTimer=setTimeout(step,16);
+  }
+  fadeTimer=setTimeout(step,16);
+ });
+ return hideTask;
 }
 function notify(title,body) { if(Notification.isSupported()) new Notification({title,body,silent:true}).show(); }
-app.on('before-quit',()=>{quitting=true;if(tray)tray.destroy();});
+app.on('before-quit',()=>{quitting=true;cancelFade();if(tray)tray.destroy();});
 app.on('window-all-closed',()=>{if(quitting)app.quit();});
