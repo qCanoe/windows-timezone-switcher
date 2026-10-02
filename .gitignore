@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+artifacts/
+light-check-profile-*/
+*.log
+*.jsonl
+.env
+.env.*
+!.env.example
