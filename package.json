@@ -1,6 +1,6 @@
 {
   "name": "timezone-tray",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Windows tray time zone switcher",
   "author": "Local Tools",
   "private": true,
