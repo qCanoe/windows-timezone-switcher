@@ -1,6 +1,6 @@
 {
   "name": "timezone-tray",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Windows tray time zone switcher",
   "author": "Local Tools",
   "private": true,
@@ -8,10 +8,12 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
-    "test": "node --test electron/zones.test.cjs",
+    "test": "node --test electron/zones.test.cjs && node check-cache.cjs",
     "test:ui": "node check-ui.cjs",
     "package": "npm run build && electron-builder --win portable",
-    "package:dir": "npm run build && electron-builder --win dir"
+    "package:dir": "npm run build && electron-builder --win dir",
+    "test:settings": "node check-settings.cjs \"release/win-unpacked/Timezone Tray.exe\"",
+    "test:performance": "node check-performance.cjs \"release/win-unpacked/Timezone Tray.exe\""
   },
   "dependencies": {
     "@fontsource/geist": "^5.2.0",
@@ -49,7 +51,9 @@
     "files": [
       "dist/**",
       "electron/**",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*",
+      "!electron/*.test.cjs"
     ],
     "win": {
       "target": "portable",
@@ -58,6 +62,10 @@
     },
     "portable": {
       "artifactName": "TimezoneTray.exe"
-    }
+    },
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ]
   }
 }

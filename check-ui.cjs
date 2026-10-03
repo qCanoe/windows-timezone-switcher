@@ -5,8 +5,7 @@ const fs=require('node:fs');
 (async()=>{
  const executablePath=process.argv[2] || require('electron');
  const packaged=!!process.argv[2];
- const artifacts=path.join(__dirname,'artifacts');
- const profile=path.join(artifacts,'profile-'+Date.now());
+ const profile=path.join(__dirname,'light-check-profile-'+Date.now());
  fs.mkdirSync(profile,{recursive:true});
  fs.writeFileSync(path.join(profile,'theme.json'),JSON.stringify({theme:'dark'}));
  const app=await electron.launch({executablePath,args:packaged?['--test-mode']:['.','--test-mode'],cwd:__dirname,env:{...process.env,TIMEZONE_TRAY_TEST_DATA:profile}});
@@ -26,7 +25,7 @@ const fs=require('node:fs');
   assert.equal(native.bounds.x+native.bounds.width,native.screen.x+native.screen.width-4);
   assert.equal(native.bounds.y+native.bounds.height,native.screen.y+native.screen.height-4);
   assert.equal(await page.getByText('关闭面板后，程序仍在托盘运行').count(),0);
-  await page.getByRole('button',{name:'系统设置',exact:true}).waitFor();
+  await page.getByRole('button',{name:'设置',exact:true}).waitFor();
   await page.getByRole('textbox',{name:'搜索时区'}).fill('Tokyo');
   assert.equal(await page.getByRole('list').getByRole('button').count(),1);
   await page.getByRole('list').getByRole('button').click();
@@ -43,8 +42,8 @@ const fs=require('node:fs');
   await page.getByRole('tab',{name:'常用',exact:true}).click();
   const inactiveBorders=await page.getByRole('list').getByRole('button').evaluateAll(rows=>rows.filter(row=>row.getAttribute('aria-pressed')==='false').map(row=>getComputedStyle(row).borderLeftColor));
   assert.ok(inactiveBorders.every(color=>color==='rgba(0, 0, 0, 0)'));
-  await page.screenshot({path:path.join(artifacts,'screenshot.png'),omitBackground:true});
-
+  await page.screenshot({path:path.resolve(__dirname,'../../outputs/时区托盘/浅色预览.png'),omitBackground:true});
+  await page.screenshot({path:path.resolve(__dirname,'../../outputs/时区托盘/界面预览.png'),omitBackground:true});
   const checks=await page.evaluate(async()=>{
    const zones=await window.timezone.read();const id=zones.find(z=>z.current).id;
    const invalid=await window.timezone.switch('bad-zone');

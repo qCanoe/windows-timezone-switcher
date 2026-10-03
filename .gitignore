@@ -8,3 +8,7 @@ light-check-profile-*/
 .env
 .env.*
 !.env.example
+
+settings-check-profile-*/
+perf-profile-*/
+debug-startup-profile/

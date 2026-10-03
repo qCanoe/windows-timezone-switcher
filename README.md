@@ -13,8 +13,9 @@ Download `TimezoneTray-Windows-x64.zip` from [Releases](https://github.com/qCano
 - Click the tray icon, choose a time zone, and click the switch button.
 - Right-click the icon for quick switches or to quit.
 - Press Esc, click ×, or click outside the panel to hide it.
+- Open Settings to choose Chinese or English and enable launch at login.
 
-Works offline, with a light monochrome interface and multi-monitor support. The panel opens above the taskbar. The app interface is currently in Chinese.
+Works offline, with a light monochrome interface and multi-monitor support. The panel opens above the taskbar. Time updates pause while the panel is hidden.
 
 If Windows restores the previous zone, turn off **Set time zone automatically** in system settings. An administrator retry is available when needed.
 

@@ -2,7 +2,18 @@ const {app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Noti
 const path = require('node:path');
 const fs = require('node:fs');
 const {readZones, switchZone} = require('./zones.cjs');
-let panel, tray, trayMenu, quitting = false, switching = false, zones = [];
+const {createPreferences} = require('./preferences.cjs');
+// This small text interface needs no 3D acceleration. Avoid retaining GPU resources.
+app.disableHardwareAcceleration();
+let preferences;
+const texts={zh:{title:'时区切换',open:'打开时区面板',settings:'设置',system:'日期和时间设置',quit:'退出',switched:'时区已切换',failed:'切换未完成'},en:{title:'Time zone switcher',open:'Open time zone panel',settings:'Settings',system:'Date & time settings',quit:'Quit',switched:'Time zone changed',failed:'Unable to switch'}};
+function text() {return texts[preferences?.getLanguage() || 'zh'];}
+function localize(result) {
+ if(!result.error || preferences.getLanguage()==='zh') return result;
+ const errors={'无效的时区。':'Invalid time zone.','正在切换，请稍候。':'A switch is in progress. Please wait.','无效请求。':'Invalid request.','时区未生效，请检查“自动设置时区”或设备管理策略。':'The time zone did not change. Check automatic time zone settings or device policies.','切换未完成：权限请求可能已取消，或设备策略限制了修改。':'The permission request was cancelled, or a device policy blocked the change.','Windows 未能切换时区，可以用管理员权限重试。':'Windows could not change the time zone. Retry as administrator.'};
+ return {...result,error:errors[result.error] || 'Unable to change the time zone. Please try again.'};
+}
+let panel, tray, trayMenu, quitting = false, switching = false, zones = [], menuSignature;
 let showTask = null, presentationGeneration = 0, blurTimer;
 let hideTask = null, fadeTimer, finishFade;
 const diagnostic = process.argv.includes('--diagnose-tray');
@@ -18,8 +29,10 @@ const favorites = [['北京 / 上海','China Standard Time'],['东京','Tokyo St
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
  app.on('second-instance', () => showPanel());
  app.whenReady().then(async () => {
+  preferences=createPreferences(app,process.argv.includes('--test-mode')?'WindowsTimezoneSwitcher.Test':'WindowsTimezoneSwitcher');
   panel = new BrowserWindow({width:456, height:696, resizable:false, frame:false, thickFrame:false, transparent:true, roundedCorners:true, show:false, opacity:0, skipTaskbar:true, alwaysOnTop:true, backgroundColor:'#00000000', title:'时区切换', autoHideMenuBar:true, webPreferences:{preload:path.join(__dirname,'preload.cjs'), contextIsolation:true, nodeIntegration:false, sandbox:true}});
   const firstPaint = new Promise(resolve => panel.once('ready-to-show', resolve));
+  panel.on('hide',()=>panel.webContents.send('panel:activity',false));
   if(diagnostic) {
    for(const event of ['show','hide','focus','blur','move','resize','ready-to-show']) panel.on(event,()=>trace(event,{bounds:panel.getBounds()}));
    for(const event of ['did-start-loading','dom-ready','did-finish-load','render-process-gone']) panel.webContents.on(event,()=>trace(event));
@@ -35,33 +48,45 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   panel.on('focus',()=>clearTimeout(blurTimer));
   panel.webContents.on('before-input-event', (event, input) => {if (input.key === 'Escape') {hidePanel();event.preventDefault();}});
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname,'tray.ico')));
-  tray.setToolTip('时区切换');
+  tray.setToolTip(text().title);
   tray.on('click', () => {trace('tray-click');if(!showTask) (hideTask || !panel.isVisible()) ? showPanel() : hidePanel();});
   tray.on('double-click', () => {trace('tray-double-click');showPanel();});
+  tray.on('right-click',async()=>{try{await refresh();}catch{}if(!tray.isDestroyed()&&trayMenu)tray.popUpContextMenu(trayMenu);});
   async function refresh() { zones=await readZones(); updateMenu(); return zones; }
   function trusted(event) { return event.sender === panel.webContents && event.senderFrame === panel.webContents.mainFrame; }
+  ipcMain.on('preferences:bootstrap',event=>{event.returnValue=trusted(event)?preferences.read():null;});
+  ipcMain.handle('preferences:read',event=>{if(!trusted(event))throw new Error('Invalid sender');return preferences.read();});
+  ipcMain.handle('preferences:update',(event,patch)=>{
+   if(!trusted(event))throw new Error('Invalid sender');
+   try {const saved=preferences.update(patch);updateMenu();panel.setTitle(text().title);return {ok:true,preferences:saved};}
+   catch(error){const en=preferences.getLanguage()==='en';return {ok:false,error:error.message==='startup_unavailable'?(en?'Startup is available in the packaged app.':'请在正式程序中设置开机启动。'):(en?'Could not save this setting. Please try again.':'设置未能保存，请重试。')};}
+  });
   ipcMain.handle('zones:read', async event => {if (!trusted(event)) throw new Error('Invalid sender'); return refresh();});
   ipcMain.handle('zones:switch', async (event,id,elevated) => {
    if (!trusted(event)) throw new Error('Invalid sender');
-   if (switching) return {ok:false,error:'正在切换，请稍候。'};
-   if (typeof elevated !== 'boolean') return {ok:false,error:'无效请求。'};
+   if (switching) return localize({ok:false,error:'正在切换，请稍候。'});
+   if (typeof elevated !== 'boolean') return localize({ok:false,error:'无效请求。'});
    switching = true;
-   try { const result=await switchZone(id,elevated); if(result.ok) {zones=result.zones; updateMenu(); if (!result.unchanged) notify('时区已切换', zones.find(z=>z.current).label);} return result; } finally {switching=false;}
+   try { const result=localize(await switchZone(id,elevated)); if(result.ok) {zones=result.zones; updateMenu(); if (!result.unchanged) notify(text().switched, preferences.getLanguage()==='en'?zones.find(z=>z.current).id:zones.find(z=>z.current).label);} return result; } finally {switching=false;}
   });
   ipcMain.on('panel:hide', event => {if(trusted(event)) hidePanel();});
   ipcMain.on('settings:open', event => {if(trusted(event)) shell.openExternal('ms-settings:dateandtime');});
   function updateMenu() {
    const current = zones.find(z=>z.current);
-   if(current) tray.setToolTip(('时区切换 · ' + current.label).slice(0,127));
+   const language=preferences.getLanguage();
+   const signature=JSON.stringify([language,current?.id,current?.label,favorites.filter(([,id])=>zones.some(z=>z.id===id)).map(([,id])=>id)]);
+   if(menuSignature===signature) return;
+   menuSignature=signature;
+   if(current) tray.setToolTip((text().title+' · '+(preferences.getLanguage()==='en'?current.id:current.label)).slice(0,127));
    trayMenu=Menu.buildFromTemplate([
-    {label:'打开时区面板', click:showPanel}, {type:'separator'},
-    ...favorites.filter(([,id])=>zones.some(z=>z.id===id)).map(([label,id])=>({label,type:'checkbox', checked:current?.id===id, click:async () => {
+    {label:text().open, click:showPanel}, {type:'separator'},
+    ...favorites.filter(([,id])=>zones.some(z=>z.id===id)).map(([label,id])=>({label:preferences.getLanguage()==='en'?({'China Standard Time':'Beijing / Shanghai','Tokyo Standard Time':'Tokyo','GMT Standard Time':'London','Eastern Standard Time':'New York','Pacific Standard Time':'Los Angeles','UTC':'UTC'}[id]):label,type:'checkbox', checked:current?.id===id, click:async () => {
       if(switching) return; switching=true;
-      try {const result=await switchZone(id); if(result.ok){zones=result.zones;updateMenu();panel.webContents.send('zones:refresh');notify('时区已切换',label);}else{showPanel();notify('切换未完成',result.error);}} finally {switching=false;}
+      try {const result=localize(await switchZone(id)); if(result.ok){zones=result.zones;updateMenu();panel.webContents.send('zones:refresh');notify(text().switched,preferences.getLanguage()==='en'?id:label);}else{showPanel();notify(text().failed,result.error);}} finally {switching=false;}
     }})),
-    {type:'separator'}, {label:'日期和时间设置',click:()=>shell.openExternal('ms-settings:dateandtime')}, {label:'退出',click:()=>{quitting=true;app.quit();}}
+    {type:'separator'}, {label:text().settings,click:()=>{panel.webContents.send('preferences:open');showPanel();}}, {label:text().system,click:()=>shell.openExternal('ms-settings:dateandtime')}, {label:text().quit,click:()=>{quitting=true;app.quit();}}
    ]);
-   tray.setContextMenu(trayMenu);
+
   }
   await Promise.all([panel.loadFile(path.join(__dirname,'../dist/index.html')), firstPaint]);
   try {await refresh();} catch {updateMenu();}
@@ -110,6 +135,7 @@ async function presentPanel(generation) {
  // ready-to-show only covers startup, not a transparent window being shown again.
  panel.setOpacity(0);
  panel.showInactive();
+ panel.webContents.send('panel:activity',true);
  const frame=await panel.webContents.capturePage();
  if(generation!==presentationGeneration || panel.isDestroyed() || !panel.isVisible()) return;
  if(frame.isEmpty()) throw new Error('Window frame is not ready');
