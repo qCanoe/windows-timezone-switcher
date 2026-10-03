@@ -1,4 +1,4 @@
-const {app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Notification, systemPreferences} = require('electron');
+const {app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Notification, systemPreferences, nativeTheme} = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const {readZones, switchZone} = require('./zones.cjs');
@@ -47,7 +47,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   });
   panel.on('focus',()=>clearTimeout(blurTimer));
   panel.webContents.on('before-input-event', (event, input) => {if (input.key === 'Escape') {hidePanel();event.preventDefault();}});
-  tray = new Tray(nativeImage.createFromPath(path.join(__dirname,'tray.ico')));
+  tray = new Tray(trayImage());
+  nativeTheme.on('updated',()=>{if(tray&&!tray.isDestroyed())tray.setImage(trayImage());});
   tray.setToolTip(text().title);
   tray.on('click', () => {trace('tray-click');if(!showTask) (hideTask || !panel.isVisible()) ? showPanel() : hidePanel();});
   tray.on('double-click', () => {trace('tray-double-click');showPanel();});
@@ -93,7 +94,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   if(!process.argv.includes('--background')) await showPanel();
   // Read-only hooks used by the packaged-app integration check.
   if(process.argv.includes('--test-mode') || diagnostic) {
-   global.trayCheck = () => ({tray:!!tray&&!tray.isDestroyed(), visible:panel.isVisible(), opacity:panel.getOpacity(), reducedMotion:systemPreferences.getAnimationSettings().prefersReducedMotion, fading:!!hideTask, current:zones.find(z=>z.current)?.id, menu:trayMenu.items.map(item=>item.label), bounds:panel.getBounds(), screen:screen.getDisplayMatching(panel.getBounds()).workArea});
+   global.trayCheck = () => ({icon:trayImagePath(),tray:!!tray&&!tray.isDestroyed(), visible:panel.isVisible(), opacity:panel.getOpacity(), reducedMotion:systemPreferences.getAnimationSettings().prefersReducedMotion, fading:!!hideTask, current:zones.find(z=>z.current)?.id, menu:trayMenu.items.map(item=>item.label), bounds:panel.getBounds(), screen:screen.getDisplayMatching(panel.getBounds()).workArea});
    global.trayOpen = showPanel;
    global.trayHide = hidePanel;
   }
@@ -174,6 +175,8 @@ function hidePanel(immediate=false) {
  });
  return hideTask;
 }
+function trayImagePath() {return path.join(__dirname,nativeTheme.shouldUseDarkColorsForSystemIntegratedUI?'tray-light.ico':'tray-dark.ico');}
+function trayImage() {return nativeImage.createFromPath(trayImagePath());}
 function notify(title,body) { if(Notification.isSupported()) new Notification({title,body,silent:true}).show(); }
 app.on('before-quit',()=>{quitting=true;cancelFade();if(tray)tray.destroy();});
 app.on('window-all-closed',()=>{if(quitting)app.quit();});

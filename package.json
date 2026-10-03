@@ -1,6 +1,6 @@
 {
   "name": "timezone-tray",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "Windows tray time zone switcher",
   "author": "Local Tools",
   "private": true,
@@ -66,6 +66,12 @@
     "electronLanguages": [
       "en-US",
       "zh-CN"
+    ],
+    "extraFiles": [
+      {
+        "from": "electron/tray.ico",
+        "to": "app.ico"
+      }
     ]
   }
 }
